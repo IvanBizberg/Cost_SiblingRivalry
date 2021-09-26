@@ -1,0 +1,325 @@
+---
+title: "Costs in parents"
+author: "Ivan Bizberg"
+date: "10/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Library
+```{r include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(lubridate)
+library(dtplyr)
+library(data.table)
+
+library(usethis)
+# Data analysis
+library(performance)
+library(bbmle)
+library(sjPlot)
+
+library(glmmTMB)
+library(lme4)
+library(effects)
+library(ordinal)
+```
+```{r}
+path <- "ivan"
+```
+
+
+# Import data 
+```{r}
+# Data set for analysis (For sabbatical year model we need another data set)
+NewMother = read_csv(str_glue("C:/Users/{path}/Dropbox/PHD/DATA/Csv/DATAFemaleCosts.csv"))
+NewMother %>% names()
+Rawdata = NewMother %>%
+  distinct(ANILLOHEMB, WORKYEAR, .keep_all = T) %>% # because I want to use year variables 
+  filter(!ANILLOHEMB %in% c("SA")) %>% 
+  filter(!str_detect(ANILLOHEMB, "X")) %>% 
+  # filter(CONFIRMMACH == T) %>%
+  filter(!(SEMANIPULO == T & LastSEMANIPULO == T)) %>%
+  filter(!Nest_OrderFemale > 1) %>%
+  mutate_at(vars(ReprodLastYear, LastBroodReductionYear, WORKYEAR, ANILLOHEMB, LastClutchYear, LastBroodYear), as.factor) %>%
+  # Test another paper
+    filter(LastClutchYear == 2 & LastBroodYear == 2 #& LastBroodReductionYear == "Partial"
+    # filter(PUESTA == 2 & NIDADA == 2 #& BroodReduction == "Partial"
+           ) %>%
+  select(
+    # Dependent variables
+    # ChangePartener,
+    PROPORTIONALRANK,
+    NIDADA,
+    PUESTA,
+    Recruits,
+    LastRecruits,
+    FLEDGED,
+    ChicksBodyCondition,
+    SabNextYear,
+    BroodReduction,
+    ReprodLastYear,
+    BroodReductionBin,
+    # Reduction,
+    ### Independent variables
+    LastClutchYear,LastBroodYear,
+    LastBroodReductionYear,
+    # LastParentalCare_ALL,
+    # LastParentalCare_Egg,
+    LastParentalCare_Chick, BroodReduction,
+    ParentalCare_Chick,
+    LastProportionalRankYear,
+    RealMotherAge, 
+    # RealFatherAge,
+    CoupleExpLocal,
+    ### Random variables
+    WORKYEAR,
+    ANILLOHEMB) 
+
+
+# Remove errors
+data <- Rawdata %>% filter(!LastParentalCare_Chick < 0)
+```
+
+# Data exploration 
+```{r}
+
+# Effect of last brood in present clutch size 
+data %>% select(LastBroodYear, LastBroodReductionYear, PUESTA, RealMotherAge) %>% filter(!is.na(RealMotherAge)) %>%
+  ggplot(aes(LastBroodYear, PUESTA, color = factor(LastBroodReductionYear))) + geom_jitter(alpha = 0.6) +
+  geom_smooth(method = "lm")
+
+# Relationship between mother's age and number of fledged
+data %>% ggplot(aes(factor(RealMotherAge), fill = factor(FLEDGED))) + 
+  geom_histogram(stat = "count", position = "fill")
+
+# How chick survival varie through mothers age
+data %>% rowwise() %>% mutate(LASTAGE = mean(c(LastAge1, LastAge2, LastAge3), na.rm = T)) %>% 
+  group_by(RealMotherAge) %>% summarise(mean(LASTAGE, na.rm = T)) %>% 
+  ggplot(aes(RealMotherAge, `mean(LASTAGE, na.rm = T)`)) + geom_col()
+
+# Check for outliers 
+NewMother %>% ggplot(aes())
+```
+
+# I Analysis Change Partner
+```{r}
+ProsData = data %>% 
+  select(-NIDADA, -PUESTA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction) %>%
+  mutate(across(c(where(is.numeric), -ChangePartener), arm::rescale)) %>% drop_na
+
+mod_ChPa1 = glmmTMB(ChangePartener ~ LastBroodYear + LastBroodReductionYear + LastBroodYear : LastBroodReductionYear +
+                      LastProportionalRankYear + LastPartnerAge + RealMotherAge + (1|ANILLOHEMB) + (1|WORKYEAR),
+                 family = binomial, REML = F,
+                 data = Prepro)
+
+mod_ChPa2 = update(mod_ChPa1, . ~ . - LastBroodYear : LastBroodReductionYear)
+mod_ChPa3 = update(mod_ChPa2, . ~ . - (1|WORKYEAR))
+mod_ChPa4 = update(mod_ChPa2, . ~ . - (1|ANILLOHEMB))
+mod_ChPa5 = update(mod_ChPa2, . ~ . - (1|ANILLOHEMB) - (1|WORKYEAR))
+
+
+check_collinearity(mod_ChPa2)
+AICctab(mod_ChPa1, mod_ChPa2,mod_ChPa3, mod_ChPa4, mod_ChPa5)
+anova(mod_ChPa1, mod_ChPa2)
+
+
+summary(mod_ChPa2)
+# plot(allEffects(mod_ChPa), type = "response")
+
+```
+We can see that the most important variables are brood size / parental care / TOTAL brood reduction. More nestlings and more parental care reduce the risk of partner change, Total brood reducion increase the chances of partner change
+
+# II Analysis PROPORTIONALRANK----
+```{r}
+ProsData = data %>% 
+  select(-NIDADA, -PUESTA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction) %>%
+  mutate(across(c(where(is.numeric), -PROPORTIONALRANK), arm::rescale)) %>% drop_na
+
+Mod_PropRank = glmmTMB(PROPORTIONALRANK ~ LastBroodReductionYear + 
+                         LastProportionalRankYear + 
+                         LastParentalCare_Chick +
+                         CoupleExpLocal +
+                         RealMotherAge + 
+                         I(RealMotherAge^2) + 
+                       (1|ANILLOHEMB) + (1|WORKYEAR),
+                      family = beta_family(), REML = F,
+                     data = ProsData)
+check_collinearity(Mod_PropRank)
+
+
+summary(Mod_PropRank)
+tab_model(Mod_PropRank)
+plot(allEffects(Mod_PropRank))
+```
+
+# III  Analysis Clutch size
+```{r}
+ProsData %<>% mutate(fct_relevel(LastBroodReductionYear, "NO", after = 2)) 
+ProsData = data %>% 
+  select(-NIDADA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction) %>% 
+  mutate(across(c(where(is.numeric), -PROPORTIONALRANK), arm::rescale)) %>% drop_na
+
+Mod_Clutch = lmer((PUESTA) ~ LastBroodReductionYear + #LastBroodYear * 
+                    # LastParentalCare_Chick +
+                     + PROPORTIONALRANK + LastProportionalRankYear + #CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    # REML = F,
+                    data = ProsData)
+check_collinearity(Mod_Clutch)
+
+
+summary(Mod_Clutch)
+tab_model(Mod_Clutch)
+# plot(allEffects(Mod_Clutch))
+```
+
+# IV  Analysis Brood size
+```{r}
+ProsData = data %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction, -LastParentalCare_Chick) %>% 
+  mutate(across(c(where(is.numeric), -NIDADA), arm::rescale)) %>% drop_na
+
+Mod_Brood = glmmTMB((NIDADA) ~ #LastBroodYear + 
+                      PROPORTIONALRANK + 
+                      # LastParentalCare_Chick + 
+                      # LastParentalCare_Chick : LastBroodReductionYear +
+                      LastBroodReductionYear + LastProportionalRankYear + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = poisson, REML = F,
+                    data = ProsData)
+check_collinearity(Mod_Brood)
+
+
+summary(Mod_Brood)
+tab_model(Mod_Brood)
+plot(allEffects(Mod_Brood))
+```
+Mother age and last year parental care of chicks have an positive and negative effect respectively on brood size (similar result for parental care with poisson distribution)
+
+
+
+
+
+# V Analysis Chicks Body Condition
+```{r}
+ProsData = data %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -FLEDGED, -NIDADA, -SabNextYear, -BroodReduction) %>% 
+  mutate(across(c(where(is.numeric), -ChicksBodyCondition), arm::rescale)) %>% drop_na
+
+# Check distribution
+ProsData %>% ggplot(aes(ChicksBodyCondition)) + geom_histogram() 
+Mod_Brood = lmer(ChicksBodyCondition ~ #LastParentalCare_Chick + 
+                   # LastBroodYear +
+                   PROPORTIONALRANK + LastBroodReductionYear + CoupleExpLocal +
+                      RealMotherAge +
+                      # (1|ANILLOHEMB) + 
+                   (1|WORKYEAR),
+                    REML = F,
+                    data = ProsData)
+check_collinearity(Mod_Brood)
+
+
+tab_model(Mod_Brood)
+# plot(allEffects(Mod_Brood))
+```
+Chick body condition doesn't get affected by previous brood reduction. We are starting to see a patron body condition of the chicks is rarely getting affected. Maybe an effect of brood reduction
+
+
+# VI Analysis Fledglings 
+```{r}
+ProsData = data %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -ChicksBodyCondition, -NIDADA, -SabNextYear, -BroodReduction) %>% 
+  mutate(across(c(where(is.numeric), -FLEDGED), arm::rescale)) %>% drop_na
+
+data %>% ggplot(aes(FLEDGED)) + geom_histogram()
+
+Mod_Fledg = glmmTMB(FLEDGED ~ PROPORTIONALRANK + 
+                      # LastParentalCare_Chick +
+                      LastBroodReductionYear + LastProportionalRankYear + 
+                      # LastBroodReductionYear : LastParentalCare_Chick + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = poisson, REML = F,
+                    data = ProsData)
+
+check_collinearity(Mod_Fledg)
+summary(Mod_Fledg)
+```
+Last year brood size has a positive effect on the number of fledglings.
+
+# VII Analysis brood reduction 
+```{r}
+ProsData = data %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -ChicksBodyCondition, -NIDADA, -SabNextYear) %>% 
+  mutate(across(c(where(is.numeric), -BroodReductionBin), arm::rescale)) %>% drop_na
+
+Mod_Brood = glmmTMB(BroodReductionBin ~ #LastBroodYear + 
+                      PROPORTIONALRANK + 
+                      # LastParentalCare_Chick +
+                      LastBroodReductionYear + LastProportionalRankYear + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = binomial(link="probit"),REML = FALSE, 
+                    data = ProsData)
+
+check_collinearity(Mod_Brood)
+summary(Mod_Brood)
+```
+# VIII Analysis Recruits at 6 years old
+```{r}
+ProsData = data %>% mutate_at(vars(WORKYEAR, ANILLOHEMB, ReprodLastYear), as.factor) %>%
+  mutate(across(c(where(is.numeric), -Recruits), arm::rescale)) %>%  
+  mutate(BiRecruits = if_else(Recruits > 0, 1, 0)) %>% 
+  mutate(BiLastRecruits = if_else(LastRecruits > 0, 1, 0)) %>% 
+  filter(!WORKYEAR > 2013) # need to avoid including chicks that can't yet be recruits
+  
+ProsData %>% ggplot(aes(BiLastRecruits)) + geom_histogram()
+
+Mod_Brood = glmmTMB(BiRecruits ~ #LastBroodYear * LastBroodReductionYear +
+                      PROPORTIONALRANK + #BiLastRecruits + 
+                      LastParentalCare_Chick +
+                      # LastBroodReductionYear + #LastProportionalRankYear + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = binomial(link="probit"),REML = FALSE, 
+                    data = ProsData)
+
+check_collinearity(Mod_Brood)
+summary(Mod_Brood)
+```
+
+# VIV Analysis next year reproduction (sabbatical)
+```{r}
+NewMother %>% names()
+ProsData = data %>% 
+  select(c(-contains("Last"), -PUESTA, -Recruits, -ChicksBodyCondition, -NIDADA, -FLEDGED)) %>% 
+  mutate(across(c(where(is.numeric), -SabNextYear), arm::rescale)) %>% drop_na
+
+Mod_Brood = glmmTMB(SabNextYear ~ #LastBroodYear + 
+                      # PROPORTIONALRANK + 
+                      ParentalCare_Chick +
+                      BroodReduction + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = binomial(link="probit"),REML = FALSE, 
+                    data = ProsData)
+
+check_collinearity(Mod_Brood)
+summary(Mod_Brood)
+```
+
+# Results
+Early results suggest that the trade off between parental care and future reproduction is masked by individual females quality.  
+

@@ -1,0 +1,278 @@
+---
+title: "Cost of sibling conflict"
+author: "Ivan Bizberg"
+date: "1/30/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Libraries
+```{r, include=FALSE}
+library(tidyverse)
+library(magrittr)
+library(lubridate)
+library(dtplyr)
+library(data.table)
+
+library(usethis)
+# Data analysis
+library(performance)
+library(bbmle)
+library(sjPlot)
+
+library(glmmTMB)
+library(lme4)
+library(effects)
+library(ordinal)
+```
+
+# Import local functions
+```{r}
+source("C:/Users/conducta/Dropbox/PHD/Custom functions/Censoring.R")
+```
+
+
+# Import raw data
+```{r, include=FALSE}
+path <- "conducta"
+
+OffsMother <- read.csv(str_glue("C:/Users/{path}/Dropbox/PHD/DATA/Csv/RawData4.5.csv"))
+AdltMother <- read_csv(str_glue("C:/Users/{path}/Dropbox/PHD/DATA/Csv/DATAFemaleCosts.csv"))
+```
+
+# Import environemental data and merge
+```{r}
+ClimM <- read_csv(str_glue("C:/Users/{path}/Dropbox/PHD/Git/Climwin_MassA/FinalRefittedDATABodyCond_1.csv"))
+ClimM_A <- ClimM %>% select(ANILLO, WORKYEAR, NIDO, RefittedChl, RefittedSST, RefittedAreaRain)
+
+OffsMerge <- OffsMother %>% left_join(ClimM_A, by = c("WORKYEAR", "NIDO"))
+```
+
+
+# Cost in offsprings
+
+## Filter data
+```{r}
+Offsdata <- OffsMerge %>% filter(!SEMANIPULO == "t") %>%filter(!Nest_OrderFemale %in% c(2,3)) %>% 
+  filter((PUESTA == 2 & NIDADA == 2 & MURIO2 == "t")) %>% # Run the analyses in clutches/broods of 2
+  # filter((PUESTA == 2 & NIDADA == 2 & MURIO2 == "t") | NIDADA == 3 & MURIO2 == "t" & MURIO3 == "t") %>% # Run the analyses in clutches/broods of 2 and 3
+    select(WORKYEAR, NIDO, PROPORTIONALRANK, NIDADA,
+         BodyCondSMI1, PESO701, ULNA701, CondCohabtime1,
+         EstHatchAsynchro12_,
+         # CoupleExpLocal, 
+         Recruit1,
+         # RefittedChl, RefittedSST,RefittedAreaRain,
+         RealMotherAge, CONFIRMHEMB, ANILLOHEMB,
+         # RealFatherAge,CONFIRMMACH,ANILLOMACH,
+         ) %>%  
+  # filter(WORKYEAR > 2003) %>%
+  filter(CONFIRMHEMB == "t" & !ANILLOHEMB == "SA") %>%
+  # filter(CONFIRMMACH == "t" & !ANILLOMACH == "SA") %>%
+  mutate(across(c(where(is.character)), as.factor)) %>% 
+  drop_na() %>% glimpse()
+
+hist(Offsdata$CondCohabtime1)
+colSums(is.na(Offsdata))
+```
+## Cost in body condition
+```{r}
+DataCond <- Offsdata %>% 
+  mutate(NIDADA = as.factor(NIDADA)) %>%  
+  mutate(across(c(where(is.numeric),  -BodyCondSMI1, -PESO701), arm::rescale))
+Bestcond=lmer(PESO701 ~ CondCohabtime1 + PROPORTIONALRANK + 
+                ULNA701 + #NIDADA +
+                # NIDADA : CondCohabtime1 +
+                # CondCohabtime1 * RefittedChl +
+                # CoupleExpLocal +
+                # RefittedChl + 
+                # I(RefittedChl^2) + 
+                # RefittedSST +
+                # I(RefittedSST^2) +
+                # RefittedSST +
+                # I(RefittedSST^2) +
+                # RefittedAreaRain +
+                # I(RefittedAreaRain^2) +
+                RealMotherAge +
+                I(RealMotherAge^2) +
+                (1|WORKYEAR), #+ (1|ANILLOHEMB),
+              REML= FALSE, data = DataCond)
+
+sjPlot::tab_model(Bestcond)
+```
+## Cost in long term 
+```{r}
+lo <- Offsdata %>% filter(Recruit1 == 1)
+```
+
+
+
+
+
+
+
+
+
+
+
+# Cost in parents 
+
+## Filter data
+```{r}
+Adltdata <- AdltMother %>% distinct(ANILLOHEMB, WORKYEAR, .keep_all = T) %>% # because I want to use year variables 
+  filter(!ANILLOHEMB %in% c("SA")) %>% #filter(!LastNest_OrderFemale %in% c(2,3)) %>% 
+  filter(!str_detect(ANILLOHEMB, "X")) %>% 
+  # filter(CONFIRMMACH == T) %>%
+  # filter(WORKYEAR > 2003) %>% 
+  filter(!(SEMANIPULO == T & LastSEMANIPULO == T)) %>%
+  filter(!Nest_OrderFemale > 1) %>%
+  mutate_at(vars(ReprodLastYear, LastBroodReductionYear, WORKYEAR, ANILLOHEMB, LastClutchYear, LastBroodYear), as.factor) %>%
+    filter(LastClutchYear == 2 & LastBroodYear == 2 & LastBroodReduction == "Partial"
+           ) %>%
+  select(
+    # Dependent variables
+    # ChangePartener,
+    PROPORTIONALRANK,
+    NIDADA,
+    PUESTA,
+    Recruits,
+    LastRecruits,
+    FLEDGED,
+    ChicksBodyCondition,
+    SabNextYear,
+    BroodReduction,
+    ReprodLastYear,
+    BroodReductionBin,
+    # Reduction,
+    ### Independent variables
+    LastClutchYear,LastBroodYear,
+    LastBroodReductionYear,
+    LastCohabtime1, LastEstHatchAsynchro12_,
+    # LastParentalCare_ALL,
+    # LastParentalCare_Egg,
+    LastParentalCare_Chick,
+    BroodReduction,
+    ParentalCare_Chick,
+    LastProportionalRankYear,
+    RealMotherAge, 
+    # RealFatherAge,
+    CoupleExpLocal,
+    ### Random variables
+    WORKYEAR,
+    ANILLOHEMB) 
+hist(Adltdata$LastParentalCare_Chick)
+```
+
+# III  Analysis Clutch size
+```{r}
+ProsData = Adltdata %>% 
+  select(-NIDADA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction) %>% 
+  mutate(across(c(where(is.numeric), -PUESTA), arm::rescale)) %>% drop_na
+
+Mod_Clutch = lmer((PUESTA) ~ #LastParentalCare_Chick +
+                    LastCohabtime1 + LastEstHatchAsynchro12_ +
+                     #+ PROPORTIONALRANK 
+                    + LastProportionalRankYear + CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                    LastCohabtime1 : RealMotherAge +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    # REML = F,
+                    data = ProsData)
+check_collinearity(Mod_Clutch)
+
+
+summary(Mod_Clutch)
+tab_model(Mod_Clutch)
+```
+
+# IV  Analysis Brood size
+```{r}
+ProsData = Adltdata %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction) %>% 
+  mutate(across(c(where(is.numeric), -NIDADA), arm::rescale)) %>% drop_na
+
+Mod_Brood = glmmTMB((NIDADA) ~ PROPORTIONALRANK + 
+                      # LastParentalCare_Chick +
+                      LastCohabtime1 + LastEstHatchAsynchro12_ +
+                      LastProportionalRankYear + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      LastCohabtime1 : RealMotherAge +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = poisson, REML = F,
+                    data = ProsData)
+check_collinearity(Mod_Brood)
+
+
+summary(Mod_Brood)
+tab_model(Mod_Brood)
+plot(allEffects(Mod_Brood))
+```
+
+
+# VI Analysis Fledglings 
+```{r}
+ProsData = Adltdata %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -ChicksBodyCondition, -NIDADA, -SabNextYear, -BroodReduction) %>% 
+  mutate(across(c(where(is.numeric), -FLEDGED), arm::rescale)) %>% drop_na
+
+ProsData %>% ggplot(aes(FLEDGED)) + geom_histogram()
+
+Mod_Fledg = glmmTMB(FLEDGED ~ PROPORTIONALRANK + 
+                      # LastParentalCare_Chick +
+                      LastCohabtime1 + LastEstHatchAsynchro12_ +
+                      LastProportionalRankYear + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      LastCohabtime1 : RealMotherAge +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = poisson, REML = F,
+                    data = ProsData)
+
+check_collinearity(Mod_Fledg)
+summary(Mod_Fledg)
+```
+
+# VII Analysis brood reduction 
+```{r}
+ProsData = Adltdata %>% 
+  select(-PUESTA, -Recruits, -LastRecruits, -ChicksBodyCondition, -NIDADA, -SabNextYear) %>% 
+  mutate(across(c(where(is.numeric), -BroodReductionBin), arm::rescale)) %>% drop_na
+
+Mod_Brood = glmmTMB(BroodReductionBin ~ PROPORTIONALRANK + 
+                      # LastParentalCare_Chick +
+                      LastCohabtime1 + LastEstHatchAsynchro12_ +
+                      LastProportionalRankYear + 
+                      CoupleExpLocal +
+                      RealMotherAge + I(RealMotherAge^2) +
+                      LastCohabtime1 : RealMotherAge +
+                      (1|ANILLOHEMB) + (1|WORKYEAR),
+                    family = binomial(link="probit"),REML = FALSE, 
+                    data = ProsData)
+
+check_collinearity(Mod_Brood)
+summary(Mod_Brood)
+```
+# II Analysis PROPORTIONALRANK----
+```{r}
+ProsData = Adltdata %>% 
+  select(-NIDADA, -PUESTA, -Recruits, -LastRecruits, -FLEDGED, -ChicksBodyCondition, -SabNextYear, -BroodReduction) %>%
+  mutate(across(c(where(is.numeric), -PROPORTIONALRANK), arm::rescale)) %>% drop_na
+
+Mod_PropRank = glmmTMB(PROPORTIONALRANK ~ LastCohabtime1 + LastEstHatchAsynchro12_ +
+                         LastProportionalRankYear + 
+                         # LastParentalCare_Chick +
+                         CoupleExpLocal +
+                         RealMotherAge + 
+                         I(RealMotherAge^2) + 
+                       (1|ANILLOHEMB) + (1|WORKYEAR),
+                      family = beta_family(), REML = F,
+                     data = ProsData)
+check_collinearity(Mod_PropRank)
+
+
+summary(Mod_PropRank)
+tab_model(Mod_PropRank)
+plot(allEffects(Mod_PropRank))
+```
